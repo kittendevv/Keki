@@ -7,7 +7,7 @@
 </script>
 
 <div class="dock">
-	<a href={resolve('/')} class="dock-active">
+	<a href={resolve('/search')} class="dock-active">
 		<MagnifyingGlassIcon weight="bold" />
 		<span class="dock-label">Search</span>
 	</a>
