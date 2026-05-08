@@ -1,4 +1,5 @@
 import io
+import sqlite3
 import sys
 from pathlib import Path
 
@@ -53,5 +54,28 @@ async def classify(file: UploadFile = File(...)):
 
 @app.get("/recipe/{dish}")
 async def get_recipe(dish: str):
+    conn = sqlite3.connect("../db/recipes.db")
+    conn.row_factory = sqlite3.Row
 
-    return {"dish": dish, "recipe": "coming soon!"}
+    rows = conn.execute(
+        "SELECT id, name, ingredients, instructions, source FROM recipes WHERE dish = ?",
+        (dish,),
+    ).fetchall()
+    conn.close()
+
+    if not rows:
+        return {"error": "Recipe not found"}
+
+    return {
+        "dish": dish,
+        "recipe": [
+            {
+                "id": row["id"],
+                "name": row["name"],
+                "ingredients": json.loads(row["ingredients"]),
+                "instructions": row["instructions"],
+                "source": row["source"],
+            }
+            for row in rows
+        ],
+    }

@@ -1,0 +1,283 @@
+import json
+import sqlite3
+import time
+from pathlib import Path
+
+import requests
+
+DB_PATH = Path(__file__).parent / "recipes.db"
+SPOONACULAR_KEY = "a46212bc5c854a9ca6788849ff561d84"
+DAILY_LIMIT = 140
+
+FOOD_101_CLASSES = [
+    "apple_pie",
+    "baby_back_ribs",
+    "baklava",
+    "beef_carpaccio",
+    "beef_tartare",
+    "beet_salad",
+    "beignets",
+    "bibimbap",
+    "bread_pudding",
+    "breakfast_burrito",
+    "bruschetta",
+    "caesar_salad",
+    "cannoli",
+    "caprese_salad",
+    "carrot_cake",
+    "ceviche",
+    "cheese_plate",
+    "cheesecake",
+    "chicken_curry",
+    "chicken_quesadilla",
+    "chicken_wings",
+    "chocolate_cake",
+    "chocolate_mousse",
+    "churros",
+    "clam_chowder",
+    "club_sandwich",
+    "crab_cakes",
+    "creme_brulee",
+    "croque_madame",
+    "cup_cakes",
+    "deviled_eggs",
+    "donuts",
+    "dumplings",
+    "edamame",
+    "eggs_benedict",
+    "escargots",
+    "falafel",
+    "filet_mignon",
+    "fish_and_chips",
+    "foie_gras",
+    "french_fries",
+    "french_onion_soup",
+    "french_toast",
+    "fried_calamari",
+    "fried_rice",
+    "frozen_yogurt",
+    "garlic_bread",
+    "gnocchi",
+    "greek_salad",
+    "grilled_cheese_sandwich",
+    "grilled_salmon",
+    "guacamole",
+    "gyoza",
+    "hamburger",
+    "hot_and_sour_soup",
+    "hot_dog",
+    "huevos_rancheros",
+    "hummus",
+    "ice_cream",
+    "lasagna",
+    "lobster_bisque",
+    "lobster_roll_sandwich",
+    "macaroni_and_cheese",
+    "macarons",
+    "miso_soup",
+    "mussels",
+    "nachos",
+    "omelette",
+    "onion_rings",
+    "oysters",
+    "pad_thai",
+    "paella",
+    "pancakes",
+    "panna_cotta",
+    "peking_duck",
+    "pho",
+    "pizza",
+    "pork_chop",
+    "poutine",
+    "prime_rib",
+    "pulled_pork_sandwich",
+    "ramen",
+    "ravioli",
+    "red_velvet_cake",
+    "risotto",
+    "samosa",
+    "sashimi",
+    "scallops",
+    "seaweed_salad",
+    "shrimp_and_grits",
+    "spaghetti_bolognese",
+    "spaghetti_carbonara",
+    "spring_rolls",
+    "steak",
+    "strawberry_shortcake",
+    "sushi",
+    "tacos",
+    "takoyaki",
+    "tiramisu",
+    "tuna_tartare",
+    "waffles",
+]
+
+
+def create_table(conn):
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS recipes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            dish TEXT NOT NULL,
+            name TEXT,
+            ingredients TEXT,
+            instructions TEXT,
+            source TEXT
+        )
+    """)
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_dish ON recipes (dish)")
+    conn.commit()
+
+
+def dish_already_seeded(conn, dish):
+    row = conn.execute(
+        "SELECT COUNT(*) FROM recipes WHERE dish = ?", (dish,)
+    ).fetchone()
+    return row[0] > 0
+
+
+def fetch_from_mealdb(dish_name):
+    query = dish_name.replace("_", " ")
+    url = f"https://www.themealdb.com/api/json/v1/1/search.php?s={query}"
+    response = requests.get(url)
+    data = response.json()
+
+    if not data["meals"]:
+        return []
+
+    results = []
+    for meal in data["meals"][:5]:
+        ingredients = []
+        for i in range(1, 21):
+            ingredient = (meal.get(f"strIngredient{i}") or "").strip()
+            measure = (meal.get(f"strMeasure{i}") or "").strip()
+            if ingredient:
+                ingredients.append(f"{measure} {ingredient}".strip())
+
+        results.append(
+            {
+                "name": meal["strMeal"],
+                "ingredients": json.dumps(ingredients),
+                "instructions": meal["strInstructions"],
+                "source": "themealdb",
+            }
+        )
+
+    return results
+
+
+def fetch_from_spoonacular(dish_name, requests_used):
+    if requests_used >= DAILY_LIMIT:
+        return [], requests_used
+
+    query = dish_name.replace("_", " ")
+
+    search_url = "https://api.spoonacular.com/recipes/complexSearch"
+    search_resp = requests.get(
+        search_url,
+        params={
+            "query": query,
+            "number": 5,
+            "apiKey": SPOONACULAR_KEY,
+        },
+    )
+    requests_used += 1
+
+    search_data = search_resp.json()
+    if not search_data.get("results"):
+        return [], requests_used
+
+    results = []
+    for result in search_data["results"]:
+        if requests_used >= DAILY_LIMIT:
+            break
+
+        detail_url = f"https://api.spoonacular.com/recipes/{result['id']}/information"
+        detail_resp = requests.get(detail_url, params={"apiKey": SPOONACULAR_KEY})
+        requests_used += 1
+
+        detail = detail_resp.json()
+
+        ingredients = [ing["original"] for ing in detail.get("extendedIngredients", [])]
+
+        instructions = detail.get("instructions") or ""
+
+        if instructions:
+            results.append(
+                {
+                    "name": detail["title"],
+                    "ingredients": json.dumps(ingredients),
+                    "instructions": instructions,
+                    "source": "spoonacular",
+                }
+            )
+
+        time.sleep(0.3)
+
+    return results, requests_used
+
+
+def seed():
+    conn = sqlite3.connect(DB_PATH)
+    create_table(conn)
+
+    spoonacular_requests = 0
+    found = 0
+    missing = []
+    skipped = 0
+
+    for dish in FOOD_101_CLASSES:
+        if dish_already_seeded(conn, dish):
+            print(f"Skipping {dish} (already seeded)")
+            skipped += 1
+            continue
+
+        print(f"Fetching {dish}...", end=" ")
+
+        recipes = fetch_from_mealdb(dish)
+
+        if not recipes:
+            if spoonacular_requests >= DAILY_LIMIT:
+                print("✗ (daily limit reached, will retry tomorrow)")
+                missing.append(dish)
+                continue
+
+            recipes, spoonacular_requests = fetch_from_spoonacular(
+                dish, spoonacular_requests
+            )
+
+        if recipes:
+            for recipe in recipes:
+                conn.execute(
+                    """
+                    INSERT INTO recipes (dish, name, ingredients, instructions, source)
+                    VALUES (?, ?, ?, ?, ?)
+                """,
+                    (
+                        dish,
+                        recipe["name"],
+                        recipe["ingredients"],
+                        recipe["instructions"],
+                        recipe["source"],
+                    ),
+                )
+            conn.commit()
+            found += 1
+            print(
+                f"✓ ({len(recipes)} recipes, {spoonacular_requests} spoonacular requests used)"
+            )
+        else:
+            missing.append(dish)
+            print("✗ not found")
+
+        time.sleep(0.5)
+
+    conn.close()
+
+    print(f"\nDone! {found} new dishes seeded, {skipped} skipped.")
+    if missing:
+        print(f"Still missing: {', '.join(missing)}")
+
+
+if __name__ == "__main__":
+    seed()
