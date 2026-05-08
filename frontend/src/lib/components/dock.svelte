@@ -1,22 +1,24 @@
 <script lang="ts">
-	import CameraIcon from 'phosphor-svelte/lib/CameraIcon';
+	import { resolve } from '$app/paths';
+
+	import MagnifyingGlassIcon from 'phosphor-svelte/lib/MagnifyingGlassIcon';
 	import ClockIcon from 'phosphor-svelte/lib/ClockIcon';
 	import GearIcon from 'phosphor-svelte/lib/GearIcon';
 </script>
 
 <div class="dock">
-	<button>
-		<CameraIcon weight="bold" />
-		<span class="dock-label">Scan</span>
-	</button>
+	<a href={resolve('/')} class="dock-active">
+		<MagnifyingGlassIcon weight="bold" />
+		<span class="dock-label">Search</span>
+	</a>
 
-	<button class="dock-active">
+	<a href={resolve('/')}>
 		<ClockIcon weight="bold" />
 		<span class="dock-label">History</span>
-	</button>
+	</a>
 
-	<button>
+	<a href={resolve('/')}>
 		<GearIcon />
 		<span class="dock-label">Settings</span>
-	</button>
+	</a>
 </div>
