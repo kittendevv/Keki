@@ -36,9 +36,6 @@
 		"vite": "^8.0.10"
 	},
 	"dependencies": {
-		"@capacitor/android": "^8.3.3",
-		"@capacitor/cli": "^8.3.3",
-		"@capacitor/core": "^8.3.3",
 		"daisyui": "^5.5.19"
 	}
 }

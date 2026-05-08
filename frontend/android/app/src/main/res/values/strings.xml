@@ -1,7 +1,0 @@
-<?xml version='1.0' encoding='utf-8'?>
-<resources>
-    <string name="app_name">keki</string>
-    <string name="title_activity_main">keki</string>
-    <string name="package_name">dev.codingkitten.keki</string>
-    <string name="custom_url_scheme">dev.codingkitten.keki</string>
-</resources>
