@@ -1,33 +1,17 @@
-const sveltePreprocess = require('svelte-preprocess')
-const svelteNativePreprocessor = require('@nativescript-community/svelte-native-preprocessor')
+import adapter from '@sveltejs/adapter-auto';
 
-// this can be called either through svelte-loader where we want either __ANDROID__ or __IOS__ to be defined but not both
-// or through svelte-check where we want both so everything is checked
-const webpack_env = process.env['NATIVESCRIPT_WEBPACK_ENV']
-  ? JSON.parse(process.env['NATIVESCRIPT_WEBPACK_ENV'])
-  : {
-      android: true,
-      ios: true,
-    }
-module.exports = {
-  compilerOptions: {
-    namespace: 'foreign',
-  },
-  preprocess: [
-    sveltePreprocess({
-      replace: [
-        [/__ANDROID__/g, !!webpack_env.android],
-        [/__IOS__/g, !!webpack_env.ios],
-      ],
-      typescript: {
-        compilerOptions: {
-          verbatimModuleSyntax: true,
-          target: 'es2020',
-        },
-      },
-    }),
-    // if you want bind:text="{email}" to be transformed to text="{email}" on:textChanged="{e => email = e.value}"
-    // enable svelteNativePreprocessor. Keep in mind that it is pretty slow
-    /* svelteNativePreprocessor() */
-  ],
-}
+/** @type {import('@sveltejs/kit').Config} */
+const config = {
+	compilerOptions: {
+		// Force runes mode for the project, except for libraries. Can be removed in svelte 6.
+		runes: ({ filename }) => (filename.split(/[/\\]/).includes('node_modules') ? undefined : true)
+	},
+	kit: {
+		// adapter-auto only supports some environments, see https://svelte.dev/docs/kit/adapter-auto for a list.
+		// If your environment is not supported, or you settled on a specific environment, switch out the adapter.
+		// See https://svelte.dev/docs/kit/adapters for more information about adapters.
+		adapter: adapter()
+	}
+};
+
+export default config;
