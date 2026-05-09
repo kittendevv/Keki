@@ -1,16 +1,30 @@
 import io
 import json
+import logging
 import random
 import sqlite3
 import sys
+import time
+import uuid
+from difflib import get_close_matches
 from pathlib import Path
 
-import httpx
+import httpx  # type: ignore
 import torch
 import torchvision.transforms as transforms
+from auth import get_db, require_admin, require_user  # type: ignore
 
 sys.path.append(str(Path(__file__).parent.parent / "model"))
-from fastapi import FastAPI, File, HTTPException, Request, UploadFile  # type: ignore
+from fastapi import (  # type: ignore
+    APIRouter,
+    Depends,
+    FastAPI,
+    File,
+    HTTPException,
+    Query,
+    Request,
+    UploadFile,
+)
 from fastapi.middleware.cors import CORSMiddleware  # type: ignore
 from model import FoodCNN  # type: ignore
 from PIL import Image
@@ -18,7 +32,22 @@ from slowapi import Limiter, _rate_limit_exceeded_handler  # type: ignore
 from slowapi.errors import RateLimitExceeded  # type: ignore
 from slowapi.util import get_remote_address  # type: ignore
 
-app = FastAPI()
+_FUN_FACTS_PATH = Path(__file__).parent / "fun_facts.json"
+FUN_FACTS: dict[str, list[str]] = (
+    json.loads(_FUN_FACTS_PATH.read_text()) if _FUN_FACTS_PATH.exists() else {}
+)
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+
+logger = logging.getLogger("keki")
+
+app = FastAPI(title="Keki API")
+
+v1 = APIRouter(prefix="/v1")
 limiter = Limiter(key_func=get_remote_address)
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
@@ -29,6 +58,23 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    start = time.perf_counter()
+    response = await call_next(request)
+    duration = (time.perf_counter() - start) * 1000
+    logger.info(
+        "%s %s %d %.1fms %s",
+        request.method,
+        request.url.path,
+        response.status_code,
+        duration,
+        request.client.host if request.client else "-",
+    )
+    return response
+
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")  # type: ignore
 
@@ -72,7 +118,7 @@ PORTION_SIZES = {
 DEFAULT_PORTION = 250
 
 
-@app.post("/classify")
+@v1.post("/classify")
 @limiter.limit("10/minute")
 async def classify(request: Request, file: UploadFile = File(...)):
     contents = await file.read()
@@ -107,7 +153,7 @@ async def classify(request: Request, file: UploadFile = File(...)):
 
 
 # Use /recipe/{dish}?exclude=ingredient1,ingredient2 to exclude certain ingredients from results
-@app.get("/recipe/mock")
+@v1.get("/recipe/mock")
 @limiter.limit("60/minute")
 async def mock_recipe(request: Request):
     conn = sqlite3.connect("../db/recipes.db")
@@ -132,7 +178,50 @@ async def mock_recipe(request: Request):
     }
 
 
-@app.get("/recipe/{dish}")
+@v1.get("/search")
+@limiter.limit("30/minute")
+async def search(request: Request, q: str = Query(..., min_length=1, max_length=100)):
+    if not q.strip():
+        raise HTTPException(status_code=400, detail="Query cannot be empty")
+
+    term = f"%{q.strip().lower()}%"
+
+    conn = sqlite3.connect("../db/recipes.db")
+    conn.row_factory = sqlite3.Row
+    try:
+        cursor = conn.execute(
+            """
+            SELECT DISTINCT dish, name, ingredients, servings
+            FROM recipes
+            WHERE LOWER(dish) LIKE ?
+               OR LOWER(name) LIKE ?
+               OR LOWER(ingredients) LIKE ?
+            ORDER BY
+                CASE WHEN LOWER(dish) LIKE ? THEN 0
+                     WHEN LOWER(name) LIKE ? THEN 1
+                     ELSE 2 END,
+                dish
+            LIMIT 20
+            """,
+            (term, term, term, term, term),
+        )
+        rows = cursor.fetchall()
+    finally:
+        conn.close()
+
+    results = [
+        {
+            "dish": row["dish"],
+            "name": row["name"],
+            "ingredients": json.loads(row["ingredients"]),
+            "servings": row["servings"],
+        }
+        for row in rows
+    ]
+    return {"query": q, "results": results, "count": len(results)}
+
+
+@v1.get("/recipe/{dish}")
 @limiter.limit("60/minute")
 async def get_recipe(request: Request, dish: str, exclude: str = None):  # type: ignore
     conn = sqlite3.connect("../db/recipes.db")
@@ -175,7 +264,7 @@ async def get_recipe(request: Request, dish: str, exclude: str = None):  # type:
     return {"dish": dish, "recipes": recipes}
 
 
-@app.get("/nutrition/{dish}")
+@v1.get("/nutrition/{dish}")
 @limiter.limit("60/minute")
 async def get_nutrition(request: Request, dish: str):
     query = dish.replace("_", " ")
@@ -214,7 +303,7 @@ async def get_nutrition(request: Request, dish: str):
     }
 
 
-@app.get("/history")
+@v1.get("/history")
 @limiter.limit("100/minute")
 async def add_history(
     request: Request,
@@ -232,7 +321,7 @@ async def add_history(
     return {"status": "ok"}
 
 
-@app.get("/history/{user_id}")
+@v1.get("/history/{user_id}")
 @limiter.limit("60/minute")
 async def get_history(request: Request, user_id: str):
     conn = sqlite3.connect("../db/recipes.db")
@@ -247,7 +336,7 @@ async def get_history(request: Request, user_id: str):
     return {"user_id": user_id, "history": [dict(row) for row in rows]}
 
 
-@app.get("/similar/{dish}")
+@v1.get("/similar/{dish}")
 @limiter.limit("60/minute")
 async def get_similar(request: Request, dish: str):
     conn = sqlite3.connect("../db/recipes.db")
@@ -282,7 +371,7 @@ async def get_similar(request: Request, dish: str):
     return {"dish": dish, "similar": scores[:5]}
 
 
-@app.get("/portion/{dish}")
+@v1.get("/portion/{dish}")
 @limiter.limit("60/minute")
 async def get_portion(request: Request, dish: str):
     portion_g = PORTION_SIZES.get(dish, DEFAULT_PORTION)
@@ -324,7 +413,7 @@ async def get_portion(request: Request, dish: str):
     }
 
 
-@app.get("/health")
+@v1.get("/health")
 @limiter.limit("60/minute")
 async def health(request: Request):
     try:
@@ -345,7 +434,7 @@ async def health(request: Request):
     }
 
 
-@app.post("/classify_mock")
+@v1.post("/classify_mock")
 async def classify_mock():
     dish = random.choice(classes) if classes else "pizza"
     confidence = round(random.uniform(0.5, 0.99), 4)
@@ -358,3 +447,28 @@ async def classify_mock():
             {"dish": dish, "confidence": confidence},
         ],
     }
+
+
+@v1.post("/auth/register")
+async def register(request: Request, body: dict):
+    username = (body.get("username") or "").strip()
+    if not username:
+        raise HTTPException(status_code=400, detail="Username required")
+
+    token = str(uuid.uuid4())
+
+    conn = get_db()
+    try:
+        conn.execute(
+            "INSERT INTO users (username, token) VALUES (?, ?)", (username, token)
+        )
+        conn.commit()
+    except sqlite3.IntegrityError:
+        raise HTTPException(status_code=409, detail="Username already exists")
+    finally:
+        conn.close()
+
+    return {"username": username, "token": token}
+
+
+app.include_router(v1)

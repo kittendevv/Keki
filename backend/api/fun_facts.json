@@ -1,0 +1,22 @@
+{
+  "pizza": [
+    "Pizza was invented in Naples, Italy in the 18th century.",
+    "The world's largest pizza was 1261 square metres, made in Rome in 2012."
+  ],
+  "sushi": [
+    "Sushi originally referred to fermented fish preserved in rice — the rice was discarded.",
+    "Japan consumes about 80% of the world's bluefin tuna."
+  ],
+  "ramen": [
+    "Instant ramen was invented by Momofuku Ando in 1958 and is considered Japan's greatest postwar invention.",
+    "There are four main ramen styles: shoyu, shio, miso, and tonkotsu."
+  ],
+  "tacos": [
+    "The word 'taco' predates the arrival of Europeans in Mexico.",
+    "October 4th is National Taco Day in the US."
+  ],
+  "hamburger": [
+    "The hamburger is named after Hamburg, Germany, where minced beef patties were popular in the 19th century.",
+    "Americans eat about 50 billion burgers per year."
+  ]
+}
