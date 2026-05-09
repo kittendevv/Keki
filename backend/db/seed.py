@@ -181,6 +181,16 @@ def create_table(conn):
             timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
         )
         """)
+
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT NOT NULL,
+            dish TEXT NOT NULL,
+            confidence REAL,
+            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+        """)
     conn.commit()
 
 

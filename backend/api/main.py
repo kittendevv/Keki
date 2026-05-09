@@ -69,7 +69,7 @@ async def classify(file: UploadFile = File(...)):
 
 
 @app.get("/recipe/{dish}")
-async def get_recipe(dish: str):
+async def get_recipe(dish: str, exclude: str = None):
     conn = sqlite3.connect("../db/recipes.db")
     conn.row_factory = sqlite3.Row
 
@@ -80,21 +80,33 @@ async def get_recipe(dish: str):
     conn.close()
 
     if not rows:
-        return {"error": "Recipe not found"}
+        raise HTTPException(status_code=404, detail="Recipe not found")
 
-    return {
-        "dish": dish,
-        "recipe": [
+    exclude_list = [e.strip().lower() for e in exclude.split(",")] if exclude else []
+    recipes = []
+    for row in rows:
+        ingredients = json.loads(row["ingredients"])
+
+        if exclude_list:
+            ingredient_text = " ".join(ingredients).lower()
+            if any(e in ingredient_text for e in exclude_list):
+                continue
+
+        recipes.append(
             {
                 "id": row["id"],
                 "name": row["name"],
-                "ingredients": json.loads(row["ingredients"]),
+                "ingredients": ingredients,
                 "instructions": row["instructions"],
                 "source": row["source"],
             }
-            for row in rows
-        ],
-    }
+        )
+
+    if not recipes:
+        raise HTTPException(
+            status_code=404, detail="No recipes found without excluded ingredients"
+        )
+    return {"dish": dish, "recipes": recipes}
 
 
 @app.get("/nutrition/{dish}")
@@ -133,3 +145,29 @@ async def get_nutrition(dish: str):
         "fiber_g": nutrients.get("fiber_100g"),
         "per": "100g",
     }
+
+
+@app.get("/history")
+async def add_history(user_id: str, dish: str, confidence: float = None):
+    conn = sqlite3.connect("../db/recipes.db")
+    conn.execute(
+        "INSERT INTO history (user_id, dish, confidence) VALUES (?, ?, ?",
+        (user_id, dish, confidence),
+    )
+    conn.commit()
+    conn.close()
+    return {"status": "ok"}
+
+
+@app.get("/history/{user_id}")
+async def get_history(user_id: str):
+    conn = sqlite3.connect("../db/recipes.db")
+    conn.row_factory = sqlite3.Row
+
+    rows = conn.execute(
+        "SELECT dish, confidence, timestamp FROM history WHERE user_id = ? ORDER BY timestamp DESC LIMIT 50",
+        (user_id,),
+    ).fetchall()
+    conn.close()
+
+    return {"user_id": user_id, "history": [dict(row) for row in rows]}

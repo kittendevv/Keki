@@ -7,6 +7,7 @@ import torch
 import torch.nn as nn
 from dataset import FoodDataset
 from model import FoodCNN
+from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
@@ -34,9 +35,9 @@ if __name__ == "__main__":
     loss_fn = nn.CrossEntropyLoss()
     optimizer = torch.optim.AdamW(model.parameters(), lr=0.001, weight_decay=1e-4)
     scaler = torch.amp.GradScaler("cuda")  # type: ignore
-    scheduler = (
-        torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, patience=3, factor=0.5),
-    )
+    warmup = LinearLR(optimizer, start_factor=0.1, end_factor=1.0, total_iters=5)
+    cosine = CosineAnnealingLR(optimizer, T_max=45, eta_min=1e-6)
+    scheduler = SequentialLR(optimizer, schedulers=[warmup, cosine], milestones=[5])
 
     if os.path.exists(checkpoint_path):
         model.load_state_dict(torch.load(checkpoint_path, map_location=device))
@@ -61,7 +62,7 @@ if __name__ == "__main__":
             total_loss += loss.item()
 
         avg_loss = total_loss / len(train_loader)
-
+        scheduler.step()
         model.eval()
         top1_correct = 0
         top5_correct = 0
