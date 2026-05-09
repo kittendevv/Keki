@@ -217,7 +217,10 @@ async def get_nutrition(request: Request, dish: str):
 @app.get("/history")
 @limiter.limit("100/minute")
 async def add_history(
-    request: Request, user_id: str, dish: str, confidence: float = None
+    request: Request,
+    user_id: str,
+    dish: str,
+    confidence: float = None,  # type: ignore
 ):  # type: ignore
     conn = sqlite3.connect("../db/recipes.db")
     conn.execute(
