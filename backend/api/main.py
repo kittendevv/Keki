@@ -7,14 +7,14 @@ import torch
 import torchvision.transforms as transforms
 
 sys.path.append(str(Path(__file__).parent.parent / "model"))
-from dataset import FoodDataset
-from fastapi import FastAPI, File, UploadFile
-from model import FoodCNN
+from dataset import FoodDataset  # type: ignore
+from fastapi import FastAPI, File, UploadFile  # type: ignore
+from model import FoodCNN  # type: ignore
 from PIL import Image
 
 app = FastAPI()
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")  # type: ignore
 
 model = FoodCNN(num_classes=101).to(device)
 # model.load_state_dict(torch.load("foodcnn.pth", map_location=device))
@@ -40,12 +40,12 @@ transform = transforms.Compose(
 async def classify(file: UploadFile = File(...)):
     contents = await file.read()
     image = Image.open(io.BytesIO(contents)).convert("RGB")
-    tensor = transform(image).unsqueeze(0).to(device)
+    tensor = transform(image).unsqueeze(0).to(device)  # type: ignore
 
     with torch.no_grad():
         outputs = model(tensor)
-        probs = torch.softmax(outputs, dim=1)
-        confidence, predicted = torch.max(probs, dim=1)
+        probs = torch.softmax(outputs, dim=1)  # type: ignore
+        confidence, predicted = torch.max(probs, dim=1)  # type: ignore
 
         dish = classes[int(predicted.item())]
 

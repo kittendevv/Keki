@@ -34,11 +34,11 @@ class FoodDataset(Dataset):
             ]
         )
 
-        def len(self) -> int:
-            return len(self.samples)
+    def __len__(self) -> int:
+        return len(self.samples)
 
-        def __getitem__(self, idx):
-            img_path, label = self.samples[idx]
-            image = Image.open(img_path).convert("RGB")
-            image = self.transform(image)
-            return image, label
+    def __getitem__(self, idx):
+        img_path, label = self.samples[idx]
+        image = Image.open(img_path).convert("RGB")
+        image = self.transform(image)
+        return image, label

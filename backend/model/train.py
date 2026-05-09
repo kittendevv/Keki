@@ -1,72 +1,81 @@
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(__file__))
+
 import torch
+import torch.nn as nn
 from dataset import FoodDataset
 from model import FoodCNN
-from torch import nn
-from torch._dynamo.decorators import F
 from torch.utils.data import DataLoader
+from tqdm import tqdm
 
-EPOCHS = 30
-BATCH_SIZE = 32
-LR = 0.001
-DATA_DIR = "backend/trainingset/food-101"
-
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")  # type: ignore
 print(f"Using device: {device}")
 
-train_dataset = FoodDataset(DATA_DIR, split="train")
-test_dataset = FoodDataset(DATA_DIR, split="test")
+if __name__ == "__main__":
+    os.makedirs("checkpoints", exist_ok=True)
+    checkpoint_path = os.path.abspath("checkpoints/foodcnn.pth")
+    best_checkpoint_path = os.path.abspath("checkpoints/foodcnn_best.pth")
 
-train_loader = DataLoader(
-    train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=4
-)
-test_loader = DataLoader(
-    test_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=4
-)
+    model = FoodCNN(num_classes=101).to(device)
 
-model = FoodCNN(num_classes=101).to(device)
+    train_dataset = FoodDataset("trainingset/food-101", split="train")
+    test_dataset = FoodDataset("trainingset/food-101", split="test")
+    print(f"Train: {len(train_dataset)} images | Test: {len(test_dataset)} images")
 
-loss_fn = nn.CrossEntropyLoss()
-
-optimizer = torch.optim.Adam(model.parameters(), lr=LR)
-
-for epoch in range(EPOCHS):
-    model.train()
-    train_loss = 0
-    train_correct = 0
-
-    for images, labels in train_loader:
-        images, labels = images.to(device), labels.to(device)
-
-        optimizer.zero_grad()
-        outputs = model(images)
-        loss = loss_fn(outputs, labels)
-        loss.backward()
-        optimizer.step()
-
-        train_loss += loss.item()
-        train_correct += (outputs.argmax(1) == labels).sum().item()
-
-    model.eval()
-    test_loss = 0
-    test_correct = 0
-
-    with torch.no_grad():
-        for images, labels in test_loader:
-            images, labels = images.to(device), labels.to(device)
-            outputs = model(images)
-            loss = loss_fn(outputs, labels)
-            test_loss += loss.item()
-            test_correct += (outputs.argmax(1) == labels).sum().item()
-
-    train_acc = train_correct / len(train_dataset)  # type: ignore
-    test_acc = test_correct / len(test_dataset)  # type: ignore
-    avg_train_loss = train_loss / len(train_loader)
-    avg_test_loss = test_loss / len(test_loader)
-
-    print(
-        f"Epoch {epoch + 1}/{EPOCHS} "
-        f"| Train Loss: {avg_train_loss:.4f} | Train Acc: {train_acc:.4f} "
-        f"| Test Loss: {avg_test_loss:.4f} | Test Acc: {test_acc:.4f}"
+    train_loader = DataLoader(
+        train_dataset, batch_size=32, shuffle=True, num_workers=4, pin_memory=True
+    )
+    test_loader = DataLoader(
+        test_dataset, batch_size=32, shuffle=False, num_workers=4, pin_memory=True
     )
 
-torch.save(model.state_dict(), "food_cnn.pth")
+    loss_fn = nn.CrossEntropyLoss()
+    optimizer = torch.optim.AdamW(model.parameters(), lr=0.001, weight_decay=1e-4)
+    scheduler = (
+        torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, patience=3, factor=0.5),
+    )
+
+    if os.path.exists(checkpoint_path):
+        model.load_state_dict(torch.load(checkpoint_path, map_location=device))
+        print("Resumed from existing checkpoint.")
+
+    best_loss = float("inf")
+
+    for epoch in range(50):
+        model.train()
+        total_loss = 0
+        for images, labels in tqdm(train_loader, desc=f"Epoch {epoch + 1}"):
+            images, labels = images.to(device), labels.to(device)
+            optimizer.zero_grad()
+            outputs = model(images)
+            loss = loss_fn(outputs, labels)
+            loss.backward()
+            optimizer.step()
+            total_loss += loss.item()
+
+        avg_loss = total_loss / len(train_loader)
+
+        model.eval()
+        correct = 0
+        with torch.no_grad():
+            for images, labels in test_loader:
+                images, labels = images.to(device), labels.to(device)
+                outputs = model(images)
+                correct += (outputs.argmax(1) == labels).sum().item()
+
+        acc = correct / len(test_dataset)
+        print(
+            f"Epoch {epoch + 1:03d} | Loss={avg_loss:.4f} | Test Accuracy={acc:.4f} | LR={optimizer.param_groups[0]['lr']:.6f}"
+        )
+
+        if avg_loss < best_loss:
+            best_loss = avg_loss
+            torch.save(model.state_dict(), best_checkpoint_path)
+            print(f"  ★ New best ({best_loss:.4f}) saved to {best_checkpoint_path}")
+
+    torch.save(model.state_dict(), checkpoint_path)
+    print(f"\nTraining complete.")
+    print(f"  Final : {checkpoint_path}")
+    print(f"  Best  : {best_checkpoint_path}  (loss {best_loss:.4f})")
