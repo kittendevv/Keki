@@ -167,7 +167,8 @@ def create_table(conn):
             name TEXT,
             ingredients TEXT,
             instructions TEXT,
-            source TEXT
+            source TEXT,
+            servings INTEGER
         )
     """)
     conn.execute("CREATE INDEX IF NOT EXISTS idx_dish ON recipes (dish)")
@@ -230,6 +231,7 @@ def fetch_from_mealdb(dish_name):
                 "ingredients": json.dumps(ingredients),
                 "instructions": meal["strInstructions"],
                 "source": "themealdb",
+                "servings": 4,
             }
         )
 
@@ -289,6 +291,7 @@ def fetch_from_spoonacular(dish_name, requests_used):
                     "ingredients": json.dumps(ingredients),
                     "instructions": instructions,
                     "source": "spoonacular",
+                    "servings": detail.get("servings", 4),
                 }
             )
 
@@ -330,8 +333,8 @@ def seed():
             for recipe in recipes:
                 conn.execute(
                     """
-                    INSERT INTO recipes (dish, name, ingredients, instructions, source)
-                    VALUES (?, ?, ?, ?, ?)
+                    INSERT INTO recipes (dish, name, ingredients, instructions, source, servings)
+                    VALUES (?, ?, ?, ?, ?, ?)
                 """,
                     (
                         dish,
@@ -339,6 +342,7 @@ def seed():
                         recipe["ingredients"],
                         recipe["instructions"],
                         recipe["source"],
+                        recipe.get("servings", 4),
                     ),
                 )
             conn.commit()

@@ -34,6 +34,28 @@ transform = transforms.Compose(
     ]
 )
 
+PORTION_SIZES = {
+    "pizza": 200,
+    "hamburger": 250,
+    "sushi": 150,
+    "tacos": 170,
+    "ramen": 500,
+    "pad_thai": 300,
+    "paella": 350,
+    "steak": 250,
+    "caesar_salad": 200,
+    "french_fries": 150,
+    "pancakes": 200,
+    "waffles": 200,
+    "ice_cream": 100,
+    "cheesecake": 120,
+    "chocolate_cake": 100,
+    "tiramisu": 150,
+    "macarons": 50,
+}
+
+DEFAULT_PORTION = 250
+
 
 @app.post("/classify")
 async def classify(file: UploadFile = File(...)):
@@ -68,13 +90,16 @@ async def classify(file: UploadFile = File(...)):
     }
 
 
+# Use /recipe/{dish}?exclude=ingredient1,ingredient2 to exclude certain ingredients from results
+
+
 @app.get("/recipe/{dish}")
-async def get_recipe(dish: str, exclude: str = None):
+async def get_recipe(dish: str, exclude: str = None):  # type: ignore
     conn = sqlite3.connect("../db/recipes.db")
     conn.row_factory = sqlite3.Row
 
     rows = conn.execute(
-        "SELECT id, name, ingredients, instructions, source FROM recipes WHERE dish = ?",
+        "SELECT id, name, ingredients, instructions, source, servings FROM recipes WHERE dish = ?",
         (dish,),
     ).fetchall()
     conn.close()
@@ -99,6 +124,7 @@ async def get_recipe(dish: str, exclude: str = None):
                 "ingredients": ingredients,
                 "instructions": row["instructions"],
                 "source": row["source"],
+                "servings": row["servings"],
             }
         )
 
@@ -148,7 +174,7 @@ async def get_nutrition(dish: str):
 
 
 @app.get("/history")
-async def add_history(user_id: str, dish: str, confidence: float = None):
+async def add_history(user_id: str, dish: str, confidence: float = None):  # type: ignore
     conn = sqlite3.connect("../db/recipes.db")
     conn.execute(
         "INSERT INTO history (user_id, dish, confidence) VALUES (?, ?, ?",
@@ -171,3 +197,78 @@ async def get_history(user_id: str):
     conn.close()
 
     return {"user_id": user_id, "history": [dict(row) for row in rows]}
+
+
+@app.get("/similar/{dish}")
+async def get_similar(dish: str):
+    conn = sqlite3.connect("../db/recipes.db")
+    conn.row_factory = sqlite3.Row
+
+    row = conn.execute(
+        "SELECT ingredients FROM recipes WHERE dish = ? LIMIT 1",
+        (dish,),
+    ).fetchone()
+
+    if not row:
+        raise HTTPException(status_code=404, detail="No similar dishes found")
+
+    target_ingredients = set(json.loads(row["ingredients"]))
+
+    rows = conn.execute(
+        "SELECT dish, ingredients FROM recipes WHERE dish != ? GROUP BY dish",
+        (dish,),
+    ).fetchall()
+    conn.close()
+
+    scores = []
+
+    for r in rows:
+        ingredients = set(json.loads(r["ingredients"]))
+        overlap = len(target_ingredients & ingredients)
+        if overlap > 0:
+            scores.append({"dish": r["dish"], "shared_ingredients": overlap})
+
+    scores.sort(key=lambda x: x["shared_ingredients"], reverse=True)
+
+    return {"dish": dish, "similar": scores[:5]}
+
+
+@app.get("/portion/{dish}")
+async def get_portion(dish: str):
+    portion_g = PORTION_SIZES.get(dish, DEFAULT_PORTION)
+    query = dish.replace("_", " ")
+
+    async with httpx.AsyncClient() as client:
+        response = await client.get(
+            "https://world.openfoodfacts.org/cgi/search.pl",
+            params={
+                "search_terms": query,
+                "search_simple": 1,
+                "action": "process",
+                "json": 1,
+                "page_size": 1,
+            },
+        )
+
+    if response.status_code != 200:
+        raise HTTPException(status_code=404, detail="Nutrition info not found")
+
+    data = response.json()
+    if not data["products"]:
+        raise HTTPException(status_code=404, detail="Nutrition info not found")
+
+    nutrients = data["products"][0].get("nutriments", {})
+    per100 = nutrients.get("energy-kcal_100g", 0)
+
+    factor = portion_g / 100
+
+    return {
+        "dish": dish,
+        "portion_g": portion_g,
+        "calories": round((per100 or 0) * factor),
+        "protein_g": round((nutrients.get("proteins_100g") or 0) * factor, 1),
+        "carbs_g": round((nutrients.get("carbohydrates_100g") or 0) * factor, 1),
+        "fat_g": round((nutrients.get("fat_100g") or 0) * factor, 1),
+        "fiber_g": round((nutrients.get("fiber_100g") or 0) * factor, 1),
+        "sugar_g": round((nutrients.get("sugars_100g") or 0) * factor, 1),
+    }
