@@ -24,15 +24,31 @@ class FoodDataset(Dataset):
                 img_path = self.root_dir / "images" / f"{img_id}.jpg"
                 self.samples.append((img_path, label))
 
-        self.transform = transforms.Compose(
-            [
-                transforms.Resize((224, 224)),
-                transforms.ToTensor(),
-                transforms.Normalize(
-                    mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]
-                ),
-            ]
-        )
+            if split == "train":
+                self.transform = transforms.Compose(
+                    [
+                        transforms.Resize((144, 144)),
+                        transforms.RandomCrop(128),
+                        transforms.RandomHorizontalFlip(),
+                        transforms.ColorJitter(
+                            brightness=0.3, contrast=0.3, saturation=0.3
+                        ),
+                        transforms.ToTensor(),
+                        transforms.Normalize(
+                            mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]
+                        ),
+                    ]
+                )
+            else:
+                self.transform = transforms.Compose(
+                    [
+                        transforms.Resize((128, 128)),
+                        transforms.ToTensor(),
+                        transforms.Normalize(
+                            mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]
+                        ),
+                    ]
+                )
 
     def __len__(self) -> int:
         return len(self.samples)

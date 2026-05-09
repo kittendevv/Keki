@@ -113,6 +113,51 @@ FOOD_101_CLASSES = [
     "waffles",
 ]
 
+ALIASES = {
+    "beef_carpaccio": "carpaccio",
+    "beef_tartare": "steak tartare",
+    "bibimbap": "bibim bap",
+    "foie_gras": "foie gras pate",
+    "frozen_yogurt": "froyo",
+    "grilled_cheese_sandwich": "grilled cheese",
+    "huevos_rancheros": "huevos",
+    "lobster_roll_sandwich": "lobster roll",
+    "macaroni_and_cheese": "mac and cheese",
+    "pulled_pork_sandwich": "pulled pork",
+    "seaweed_salad": "wakame salad",
+    "shrimp_and_grits": "shrimp grits",
+    "spaghetti_carbonara": "carbonara",
+    "tuna_tartare": "tuna tartar",
+}
+
+MEALDB_ALIASES = {
+    "beef_carpaccio": "carpaccio",
+    "beef_tartare": "tartare",
+    "bibimbap": "bibimbap",
+    "fish_and_chips": "chips",
+    "french_fries": "chips",
+    "french_toast": "french toast",
+    "garlic_bread": "garlic bread",
+    "gnocchi": "gnocchi",
+    "grilled_cheese_sandwich": "grilled cheese",
+    "grilled_salmon": "salmon",
+    "guacamole": "guacamole",
+    "gyoza": "gyoza",
+    "hamburger": "burger",
+    "hot_dog": "hot dog",
+    "macaroni_and_cheese": "mac and cheese",
+    "miso_soup": "miso",
+    "nachos": "nachos",
+    "onion_rings": "onion rings",
+    "pancakes": "pancakes",
+    "ravioli": "ravioli",
+    "samosa": "samosa",
+    "sashimi": "sashimi",
+    "spring_rolls": "spring rolls",
+    "tiramisu": "tiramisu",
+    "waffles": "waffles",
+}
+
 
 def create_table(conn):
     conn.execute("""
@@ -122,10 +167,31 @@ def create_table(conn):
             name TEXT,
             ingredients TEXT,
             instructions TEXT,
-            source TEXT
+            source TEXT,
+            servings INTEGER
         )
     """)
     conn.execute("CREATE INDEX IF NOT EXISTS idx_dish ON recipes (dish)")
+
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS feedback (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            dish_predicted TEXT NOT NULL,
+            dish_correct TEXT,
+            confidence REAL,
+            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+        """)
+
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT NOT NULL,
+            dish TEXT NOT NULL,
+            confidence REAL,
+            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+        """)
     conn.commit()
 
 
@@ -141,6 +207,11 @@ def fetch_from_mealdb(dish_name):
     url = f"https://www.themealdb.com/api/json/v1/1/search.php?s={query}"
     response = requests.get(url)
     data = response.json()
+
+    if not data["meals"] and dish_name in MEALDB_ALIASES:
+        url = f"https://www.themealdb.com/api/json/v1/1/search.php?s={MEALDB_ALIASES[dish_name]}"
+        response = requests.get(url)
+        data = response.json()
 
     if not data["meals"]:
         return []
@@ -160,6 +231,7 @@ def fetch_from_mealdb(dish_name):
                 "ingredients": json.dumps(ingredients),
                 "instructions": meal["strInstructions"],
                 "source": "themealdb",
+                "servings": 4,
             }
         )
 
@@ -184,9 +256,19 @@ def fetch_from_spoonacular(dish_name, requests_used):
     requests_used += 1
 
     search_data = search_resp.json()
+    if not search_data.get("results") and dish_name in ALIASES:
+        search_resp = requests.get(
+            search_url,
+            params={
+                "query": ALIASES[dish_name],
+                "number": 5,
+                "apiKey": SPOONACULAR_KEY,
+            },
+        )
+        search_data = search_resp.json()
+        requests_used += 1
     if not search_data.get("results"):
         return [], requests_used
-
     results = []
     for result in search_data["results"]:
         if requests_used >= DAILY_LIMIT:
@@ -209,6 +291,7 @@ def fetch_from_spoonacular(dish_name, requests_used):
                     "ingredients": json.dumps(ingredients),
                     "instructions": instructions,
                     "source": "spoonacular",
+                    "servings": detail.get("servings", 4),
                 }
             )
 
@@ -250,8 +333,8 @@ def seed():
             for recipe in recipes:
                 conn.execute(
                     """
-                    INSERT INTO recipes (dish, name, ingredients, instructions, source)
-                    VALUES (?, ?, ?, ?, ?)
+                    INSERT INTO recipes (dish, name, ingredients, instructions, source, servings)
+                    VALUES (?, ?, ?, ?, ?, ?)
                 """,
                     (
                         dish,
@@ -259,6 +342,7 @@ def seed():
                         recipe["ingredients"],
                         recipe["instructions"],
                         recipe["source"],
+                        recipe.get("servings", 4),
                     ),
                 )
             conn.commit()
