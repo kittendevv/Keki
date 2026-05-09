@@ -2,13 +2,13 @@
 @plugin 'daisyui';
 
 @plugin 'daisyui/theme' {
-	name: 'dark';
+	name: 'keki-dark';
 	default: true;
-	prefersdark: false;
+	prefersdark: true;
 	color-scheme: 'dark';
-	--color-base-100: #300e0b;
-	--color-base-200: #300e0b;
-	--color-base-300: #702119;
+	--color-base-100: #1b0606;
+	--color-base-200: #300b0b;
+	--color-base-300: #451010;
 	--color-base-content: #faf6f0;
 	--color-primary: #c0392b;
 	--color-primary-content: #faf6f0;
@@ -34,4 +34,12 @@
 	--border: 1px;
 	--depth: 1;
 	--noise: 0;
+}
+
+@font-face {
+	font-family: Satoshi;
+	src: url(../lib/fonts/satoshi.ttf);
+}
+body {
+	font-family: Satoshi;
 }

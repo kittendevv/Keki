@@ -13,12 +13,12 @@
 		<span class="dock-label">Search</span>
 	</a>
 
-	<a href={resolve('/')}>
+	<a href={resolve('/history')} class:dock-active={$page.url.pathname === '/history'}>
 		<ClockIcon weight="duotone" size={18} />
 		<span class="dock-label">History</span>
 	</a>
 
-	<a href={resolve('/')}>
+	<a href={resolve('/settings')} class:dock-active={$page.url.pathname === '/settings'}>
 		<GearIcon weight="duotone" size={18} />
 		<span class="dock-label">Settings</span>
 	</a>

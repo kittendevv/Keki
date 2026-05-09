@@ -10,7 +10,5 @@
 
 <svelte:head><link rel="icon" href={favicon} /></svelte:head>
 
-<div class="bg-base-100">
-	<Dock />
-	{@render children()}
-</div>
+{@render children()}
+<Dock />
