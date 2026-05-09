@@ -1,5 +1,6 @@
 import io
 import json
+import random
 import sqlite3
 import sys
 from pathlib import Path
@@ -10,10 +11,18 @@ import torchvision.transforms as transforms
 
 sys.path.append(str(Path(__file__).parent.parent / "model"))
 from fastapi import FastAPI, File, HTTPException, UploadFile  # type: ignore
+from fastapi.middleware.cors import CORSMiddleware  # type: ignore
 from model import FoodCNN  # type: ignore
 from PIL import Image
 
 app = FastAPI()
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")  # type: ignore
 
@@ -91,6 +100,28 @@ async def classify(file: UploadFile = File(...)):
 
 
 # Use /recipe/{dish}?exclude=ingredient1,ingredient2 to exclude certain ingredients from results
+@app.get("/recipe/mock")
+async def mock_recipe():
+    conn = sqlite3.connect("../db/recipes.db")
+    conn.row_factory = sqlite3.Row
+    rows = conn.execute(
+        "SELECT id, name, ingredients, instructions, source, servings FROM recipes WHERE dish = 'pizza'",
+    ).fetchall()
+    conn.close()
+    return {
+        "dish": "pizza",
+        "recipes": [
+            {
+                "id": row["id"],
+                "name": row["name"],
+                "ingredients": json.loads(row["ingredients"]),
+                "instructions": row["instructions"],
+                "source": row["source"],
+                "servings": row["servings"],
+            }
+            for row in rows
+        ],
+    }
 
 
 @app.get("/recipe/{dish}")
@@ -271,4 +302,39 @@ async def get_portion(dish: str):
         "fat_g": round((nutrients.get("fat_100g") or 0) * factor, 1),
         "fiber_g": round((nutrients.get("fiber_100g") or 0) * factor, 1),
         "sugar_g": round((nutrients.get("sugars_100g") or 0) * factor, 1),
+    }
+
+
+@app.get("/health")
+async def health():
+    try:
+        conn = sqlite3.connect("../db/recipes.db")
+        conn.execute("SELECT COUNT(*) FROM recipes")
+        recipe_count = conn.execute("SELECT COUNT(*) FROM recipes").fetchone()[0]
+        conn.close()
+        db_status = "ok"
+    except Exception as e:
+        db_status = f"error: {str(e)}"
+        recipe_count = 0
+
+    return {
+        "status": "ok",
+        "model_loaded": model is not None,
+        "db": db_status,
+        "recipe_count": recipe_count,
+    }
+
+
+@app.post("/classify_mock")
+async def classify_mock():
+    dish = random.choice(classes) if classes else "pizza"
+    confidence = round(random.uniform(0.5, 0.99), 4)
+
+    return {
+        "uncertain": False,
+        "dish": dish,
+        "confidence": confidence,
+        "top5": [
+            {"dish": dish, "confidence": confidence},
+        ],
     }
