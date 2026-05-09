@@ -33,6 +33,7 @@ if __name__ == "__main__":
 
     loss_fn = nn.CrossEntropyLoss()
     optimizer = torch.optim.AdamW(model.parameters(), lr=0.001, weight_decay=1e-4)
+    scaler = torch.amp.GradScaler("cuda")  # type: ignore
     scheduler = (
         torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, patience=3, factor=0.5),
     )
@@ -49,25 +50,38 @@ if __name__ == "__main__":
         for images, labels in tqdm(train_loader, desc=f"Epoch {epoch + 1}"):
             images, labels = images.to(device), labels.to(device)
             optimizer.zero_grad()
-            outputs = model(images)
-            loss = loss_fn(outputs, labels)
-            loss.backward()
-            optimizer.step()
+            with torch.amp.autocast("cuda"):  # type: ignore
+                outputs = model(images)
+                loss = loss_fn(outputs, labels)
+            scaler.scale(loss).backward()
+            scaler.unscale_(optimizer)
+            nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
+            scaler.step(optimizer)
+            scaler.update()
             total_loss += loss.item()
 
         avg_loss = total_loss / len(train_loader)
 
         model.eval()
-        correct = 0
+        top1_correct = 0
+        top5_correct = 0
         with torch.no_grad():
             for images, labels in test_loader:
                 images, labels = images.to(device), labels.to(device)
                 outputs = model(images)
-                correct += (outputs.argmax(1) == labels).sum().item()
 
-        acc = correct / len(test_dataset)
+                top1_correct += (outputs.argmax(1) == labels).sum().item()
+
+                top5_indices = torch.topk(outputs, 5, dim=1).indices  # type: ignore
+                top5_correct += sum(
+                    labels[i].item() in top5_indices[i].tolist()
+                    for i in range(len(labels))
+                )
+
+        top1_acc = top1_correct / len(test_dataset)
+        top5_acc = top5_correct / len(test_dataset)
         print(
-            f"Epoch {epoch + 1:03d} | Loss={avg_loss:.4f} | Test Accuracy={acc:.4f} | LR={optimizer.param_groups[0]['lr']:.6f}"
+            f"Epoch {epoch + 1:03d} | loss: {avg_loss:.4f} | top1: {top1_acc:.4f} | top5: {top5_acc:.4f} | lr: {optimizer.param_groups[0]['lr']:.6f}"
         )
 
         if avg_loss < best_loss:
@@ -76,6 +90,6 @@ if __name__ == "__main__":
             print(f"  ★ New best ({best_loss:.4f}) saved to {best_checkpoint_path}")
 
     torch.save(model.state_dict(), checkpoint_path)
-    print(f"\nTraining complete.")
+    print("\nTraining complete.")
     print(f"  Final : {checkpoint_path}")
     print(f"  Best  : {best_checkpoint_path}  (loss {best_loss:.4f})")
