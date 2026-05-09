@@ -10,12 +10,18 @@ import torch
 import torchvision.transforms as transforms
 
 sys.path.append(str(Path(__file__).parent.parent / "model"))
-from fastapi import FastAPI, File, HTTPException, UploadFile  # type: ignore
+from fastapi import FastAPI, File, HTTPException, Request, UploadFile  # type: ignore
 from fastapi.middleware.cors import CORSMiddleware  # type: ignore
 from model import FoodCNN  # type: ignore
 from PIL import Image
+from slowapi import Limiter, _rate_limit_exceeded_handler  # type: ignore
+from slowapi.errors import RateLimitExceeded  # type: ignore
+from slowapi.util import get_remote_address  # type: ignore
 
 app = FastAPI()
+limiter = Limiter(key_func=get_remote_address)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -67,7 +73,8 @@ DEFAULT_PORTION = 250
 
 
 @app.post("/classify")
-async def classify(file: UploadFile = File(...)):
+@limiter.limit("10/minute")
+async def classify(request: Request, file: UploadFile = File(...)):
     contents = await file.read()
     image = Image.open(io.BytesIO(contents)).convert("RGB")
     tensor = transform(image).unsqueeze(0).to(device)  # type: ignore
@@ -101,7 +108,8 @@ async def classify(file: UploadFile = File(...)):
 
 # Use /recipe/{dish}?exclude=ingredient1,ingredient2 to exclude certain ingredients from results
 @app.get("/recipe/mock")
-async def mock_recipe():
+@limiter.limit("60/minute")
+async def mock_recipe(request: Request):
     conn = sqlite3.connect("../db/recipes.db")
     conn.row_factory = sqlite3.Row
     rows = conn.execute(
@@ -125,7 +133,8 @@ async def mock_recipe():
 
 
 @app.get("/recipe/{dish}")
-async def get_recipe(dish: str, exclude: str = None):  # type: ignore
+@limiter.limit("60/minute")
+async def get_recipe(request: Request, dish: str, exclude: str = None):  # type: ignore
     conn = sqlite3.connect("../db/recipes.db")
     conn.row_factory = sqlite3.Row
 
@@ -167,7 +176,8 @@ async def get_recipe(dish: str, exclude: str = None):  # type: ignore
 
 
 @app.get("/nutrition/{dish}")
-async def get_nutrition(dish: str):
+@limiter.limit("60/minute")
+async def get_nutrition(request: Request, dish: str):
     query = dish.replace("_", " ")
 
     async with httpx.AsyncClient() as client:
@@ -205,7 +215,10 @@ async def get_nutrition(dish: str):
 
 
 @app.get("/history")
-async def add_history(user_id: str, dish: str, confidence: float = None):  # type: ignore
+@limiter.limit("100/minute")
+async def add_history(
+    request: Request, user_id: str, dish: str, confidence: float = None
+):  # type: ignore
     conn = sqlite3.connect("../db/recipes.db")
     conn.execute(
         "INSERT INTO history (user_id, dish, confidence) VALUES (?, ?, ?",
@@ -217,7 +230,8 @@ async def add_history(user_id: str, dish: str, confidence: float = None):  # typ
 
 
 @app.get("/history/{user_id}")
-async def get_history(user_id: str):
+@limiter.limit("60/minute")
+async def get_history(request: Request, user_id: str):
     conn = sqlite3.connect("../db/recipes.db")
     conn.row_factory = sqlite3.Row
 
@@ -231,7 +245,8 @@ async def get_history(user_id: str):
 
 
 @app.get("/similar/{dish}")
-async def get_similar(dish: str):
+@limiter.limit("60/minute")
+async def get_similar(request: Request, dish: str):
     conn = sqlite3.connect("../db/recipes.db")
     conn.row_factory = sqlite3.Row
 
@@ -265,7 +280,8 @@ async def get_similar(dish: str):
 
 
 @app.get("/portion/{dish}")
-async def get_portion(dish: str):
+@limiter.limit("60/minute")
+async def get_portion(request: Request, dish: str):
     portion_g = PORTION_SIZES.get(dish, DEFAULT_PORTION)
     query = dish.replace("_", " ")
 
@@ -306,7 +322,8 @@ async def get_portion(dish: str):
 
 
 @app.get("/health")
-async def health():
+@limiter.limit("60/minute")
+async def health(request: Request):
     try:
         conn = sqlite3.connect("../db/recipes.db")
         conn.execute("SELECT COUNT(*) FROM recipes")
