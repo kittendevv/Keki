@@ -631,12 +631,14 @@ async def get_favorites(request: Request, user=Depends(require_user)):
     conn = get_db()
     try:
         rows = conn.execute(
-            "SELECT dish, created_at FROM favorites WHERE user_id = ? ORDER BY created_at DESC",
+            "SELECT dish_name, created_at FROM favorites WHERE user_id = ? ORDER BY created_at DESC",
         ).fetchall()
     finally:
         conn.close()
     return {
-        "favorites": [{"dish": r["dish"], "saved_at": r["created_at"]} for r in rows]
+        "favorites": [
+            {"dish": r["dish_name"], "saved_at": r["created_at"]} for r in rows
+        ]
     }
 
 
