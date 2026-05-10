@@ -72,6 +72,8 @@ def custom_openapi():
         version="1.0.0",
         routes=app.routes,
     )
+    if "components" not in schema:
+        schema["components"] = {}
     schema["components"]["securitySchemes"] = {
         "BearerAuth": {
             "type": "http",
