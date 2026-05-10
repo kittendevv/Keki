@@ -15,6 +15,7 @@ import onnxruntime as ort
 import torch
 import torchvision.transforms as T
 from auth import (  # type: ignore
+    DB_PATH,
     get_db,
     hash_password,
     require_admin,
@@ -253,7 +254,7 @@ def softmax(x):
 @v1.get("/recipe/mock")
 @limiter.limit("60/minute")
 async def mock_recipe(request: Request):
-    conn = sqlite3.connect("../db/recipes.db")
+    conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     rows = conn.execute(
         "SELECT id, name, ingredients, instructions, source, servings FROM recipes WHERE dish = 'pizza'",
@@ -618,7 +619,7 @@ async def random_recipe(request: Request, dish: str):
     try:
         row = conn.execute(
             """
-            SELECT dish, name, ingredients, instruction, servings, tags, allergens
+            SELECT dish, name, ingredients, instructions, servings, tags, allergens
             FROM recipes
             WHERE dish = ?
             ORDER BY RANDOM()
@@ -636,7 +637,7 @@ async def random_recipe(request: Request, dish: str):
         "dish": row["dish"],
         "name": row["name"],
         "ingredients": json.loads(row["ingredients"]) if row["ingredients"] else [],
-        "instructions": row["instructions"],
+        "instructions": row["instruction"],
         "servings": row["servings"],
         "tags": row["tags"].split(",") if row["tags"] else [],
         "allergens": row["allergens"].split(",") if row["allergens"] else [],
@@ -706,11 +707,11 @@ async def metrics(request: Request, _=Depends(require_admin)):
     conn = get_db()
     try:
         total = conn.execute(
-            "SELECT COUNT(*) FROM logs WHERE timestamp >= datetime('now', '-1 day'"
+            "SELECT COUNT(*) FROM logs WHERE timestamp >= datetime('now', '-1 day')"
         ).fetchone()[0]
 
         avg_latency = conn.execute(
-            "SELECT AVG(duration_ms) FROM logs WHERE timestamp >= datetime('now', '-1 day'"
+            "SELECT AVG(duration_ms) FROM logs WHERE timestamp >= datetime('now', '-1 day')"
         ).fetchone()[0]
 
         by_path = conn.execute(
