@@ -26,6 +26,8 @@ from fastapi import (  # type: ignore
     UploadFile,
 )
 from fastapi.middleware.cors import CORSMiddleware  # type: ignore
+from fastapi.openapi.utils import get_openapi  # type: ignore
+from fastapi.security import HTTPBearer  # type: ignore
 from model import FoodCNN  # type: ignore
 from PIL import Image
 from slowapi import Limiter, _rate_limit_exceeded_handler  # type: ignore
@@ -43,9 +45,11 @@ logging.basicConfig(
     datefmt="%Y-%m-%d %H:%M:%S",
 )
 
+security = HTTPBearer()
+
 logger = logging.getLogger("keki")
 
-app = FastAPI(title="Keki API")
+app = FastAPI(title="Keki API", swagger_ui_parameters={"persistAuthorization": True})
 
 v1 = APIRouter(prefix="/v1")
 limiter = Limiter(key_func=get_remote_address)
@@ -58,6 +62,31 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+def custom_openapi():
+    if app.openapi_schema:
+        return app.openapi_schema
+    schema = get_openapi(
+        title="Keki API",
+        version="1.0.0",
+        routes=app.routes,
+    )
+    schema["components"]["securitySchemes"] = {
+        "BearerAuth": {
+            "type": "http",
+            "scheme": "bearer",
+        }
+    }
+    # Apply security globally to all routes
+    for path in schema["paths"].values():
+        for method in path.values():
+            method["security"] = [{"BearerAuth": []}]
+    app.openapi_schema = schema
+    return schema
+
+
+app.openapi = custom_openapi
 
 
 @app.middleware("http")
