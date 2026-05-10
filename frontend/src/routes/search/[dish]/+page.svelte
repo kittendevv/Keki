@@ -2,4 +2,4 @@
 	let { data } = $props();
 </script>
 
-<div>{data.title}}</div>
+{data.dish}
