@@ -602,7 +602,7 @@ async def add_favorite(request: Request, dish: str, user=Depends(require_user)):
     conn = get_db()
     try:
         conn.execute(
-            "INSERT OR IGNORE INTO favorites (user_id, dish) VALUES (?, ?)",
+            "INSERT OR IGNORE INTO favorites (user_id, dish_name) VALUES (?, ?)",
             (user["id"], dish),
         )
         conn.commit()
@@ -617,7 +617,8 @@ async def remove_favorite(request: Request, dish: str, user=Depends(require_user
     conn = get_db()
     try:
         conn.execute(
-            "DELETE FROM favorites WHERE user_id = ? AND dish = ?", (user["id"], dish)
+            "DELETE FROM favorites WHERE user_id = ? AND dish_name = ?",
+            (user["id"], dish),
         )
         conn.commit()
     finally:
@@ -632,6 +633,7 @@ async def get_favorites(request: Request, user=Depends(require_user)):
     try:
         rows = conn.execute(
             "SELECT dish_name, created_at FROM favorites WHERE user_id = ? ORDER BY created_at DESC",
+            (user["id"],),
         ).fetchall()
     finally:
         conn.close()
