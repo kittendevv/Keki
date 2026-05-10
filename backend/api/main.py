@@ -592,8 +592,12 @@ async def login(request: Request, body: dict):
     if not user:
         raise HTTPException(status_code=401, detail="Invalid username or password")
 
-    print(f"user: {dict(user)}")
-    print(f"verify: {verify_password(password, user['password_hash'])}")
+    print(f"user: {dict(user)}", file=sys.stderr, flush=True)
+    print(
+        f"verify: {verify_password(password, user['password_hash'])}",
+        file=sys.stderr,
+        flush=True,
+    )  # type: ignore
 
     if not verify_password(password, user["password_hash"]):
         raise HTTPException(status_code=401, detail="Invalid username or password")
