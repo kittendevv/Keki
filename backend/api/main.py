@@ -589,10 +589,10 @@ async def login(request: Request, body: dict):
     finally:
         conn.close()
 
-    if not user:  # type: ignore
+    if not user:
         raise HTTPException(status_code=401, detail="Invalid username or password")
 
-    if not verify_password(password, user["password_hash"]):  # type: ignore
+    if not verify_password(password, user["password_hash"]):
         raise HTTPException(status_code=401, detail="Invalid username or password")
     return {"username": username, "token": user["token"]}
 
