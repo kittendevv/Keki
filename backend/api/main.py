@@ -590,7 +590,7 @@ async def login(request: Request, body: AuthBody):
     conn = get_db()
 
     try:
-        conn.execute(
+        user = conn.execute(
             "SELECT token, password_hash FROM users WHERE username = ?", (username,)
         ).fetchone()
     finally:
