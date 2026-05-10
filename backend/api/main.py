@@ -14,7 +14,13 @@ import numpy as np
 import onnxruntime as ort
 import torch
 import torchvision.transforms as T
-from auth import get_db, require_admin, require_user  # type: ignore
+from auth import (  # type: ignore
+    get_db,
+    hash_password,
+    require_admin,
+    require_user,
+    verify_password,
+)
 
 sys.path.append(str(Path(__file__).parent.parent / "model"))
 from fastapi import (  # type: ignore
@@ -545,23 +551,50 @@ async def classify_mock():
 @v1.post("/auth/register")
 async def register(request: Request, body: dict):
     username = (body.get("username") or "").strip()
-    if not username:
-        raise HTTPException(status_code=400, detail="Username required")
+    password = (body.get("password") or "").strip()
+    if not username or not password:
+        raise HTTPException(status_code=400, detail="Username and password required")
 
     token = str(uuid.uuid4())
+    password_hash = hash_password(password)
 
     conn = get_db()
     try:
         conn.execute(
-            "INSERT INTO users (username, token) VALUES (?, ?)", (username, token)
+            "INSERT INTO users (username, token, password_hash) VALUES (?, ?, ?)",
+            (username, token, password_hash),
         )
         conn.commit()
-    except sqlite3.IntegrityError:
-        raise HTTPException(status_code=409, detail="Username already exists")
+    except:
+        raise HTTPException(status_code=409, detail="Username already taken")
     finally:
         conn.close()
 
     return {"username": username, "token": token}
+
+
+@v1.post("/auth/login")
+async def login(request: Request, body: dict):
+    username = (body.get("username") or "").strip()
+    password = (body.get("password") or "").strip()
+    if not username or not password:
+        raise HTTPException(status_code=400, detail="Username and password required")
+    user = None
+    conn = get_db()
+
+    try:
+        conn.execute(
+            "SELECT token, password_hash FROM users WHERE username = ?", (username,)
+        ).fetchone()
+    finally:
+        conn.close()
+
+    if not user:  # type: ignore
+        raise HTTPException(status_code=401, detail="Invalid username or password")
+
+    if not verify_password(password, user["password_hash"]):  # type: ignore
+        raise HTTPException(status_code=401, detail="Invalid username or password")
+    return {"username": username, "token": user["token"]}
 
 
 @v1.get("/recipe/{dish}/random")
