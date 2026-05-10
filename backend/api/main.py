@@ -65,14 +65,27 @@ async def log_requests(request: Request, call_next):
     start = time.perf_counter()
     response = await call_next(request)
     duration = (time.perf_counter() - start) * 1000
-    logger.info(
-        "%s %s %d %.1fms %s",
-        request.method,
-        request.url.path,
-        response.status_code,
-        duration,
-        request.client.host if request.client else "-",
-    )
+
+    method = request.method
+    path = request.url.path
+    status = response.status_code
+    ip = request.client.host if request.client else "-"
+
+    # Log to stdout (visible in journalctl)
+    logger.info("%s %s %d %.1fms %s", method, path, status, duration, ip)
+
+    # Log to DB in a try/except so a DB hiccup never kills the response
+    try:
+        conn = get_db()
+        conn.execute(
+            "INSERT INTO logs (method, path, status_code, duration_ms, client_ip) VALUES (?,?,?,?,?)",
+            (method, path, status, round(duration, 2), ip),
+        )
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        logger.warning("Failed to write to logs table: %s", e)
+
     return response
 
 
@@ -83,9 +96,9 @@ model = FoodCNN(num_classes=101).to(device)
 # model.eval()
 
 classes = []
-# with open("../model/trainingset/food-101/meta/train.json") as f:
-#    train_data = json.load(f)
-# classes = sorted(train_data.keys())
+with open("../model/trainingset/food-101/meta/train.json") as f:
+    train_data = json.load(f)
+    classes = sorted(train_data.keys())
 
 transform = transforms.Compose(
     [
@@ -181,31 +194,31 @@ async def mock_recipe(request: Request):
 @v1.get("/search")
 @limiter.limit("30/minute")
 async def search(request: Request, q: str = Query(..., min_length=1, max_length=100)):
-    if not q.strip():
-        raise HTTPException(status_code=400, detail="Query cannot be empty")
+    q_clean = q.strip().lower()
 
-    term = f"%{q.strip().lower()}%"
+    fuzzy_classes = get_close_matches(
+        q_clean, [c.lower() for c in classes], n=5, cutoff=0.6
+    )
 
-    conn = sqlite3.connect("../db/recipes.db")
-    conn.row_factory = sqlite3.Row
+    term = f"%{q_clean}%"
+    conn = get_db()
     try:
-        cursor = conn.execute(
+        rows = conn.execute(
             """
-            SELECT DISTINCT dish, name, ingredients, servings
+            SELECT DISTINCT dish, name, ingredients, servings, tags, allergens
             FROM recipes
             WHERE LOWER(dish) LIKE ?
-               OR LOWER(name) LIKE ?
-               OR LOWER(ingredients) LIKE ?
+                OR LOWER(name) LIKE ?
+                OR LOWER(ingredients) LIKE ?
             ORDER BY
                 CASE WHEN LOWER(dish) LIKE ? THEN 0
-                     WHEN LOWER(name) LIKE ? THEN 1
-                     ELSE 2 END,
+                    WHEN LOWER(name) LIKE ? THEN 1
+                    ELSE 2 END,
                 dish
             LIMIT 20
             """,
             (term, term, term, term, term),
-        )
-        rows = cursor.fetchall()
+        ).fetchall()
     finally:
         conn.close()
 
@@ -213,11 +226,20 @@ async def search(request: Request, q: str = Query(..., min_length=1, max_length=
         {
             "dish": row["dish"],
             "name": row["name"],
-            "ingredients": json.loads(row["ingredients"]),
+            "ingredients": json.loads(row["ingredients"]) if row["ingredients"] else [],
             "servings": row["servings"],
+            "tags": row["tags"].split(",") if row["tags"] else [],
+            "allergens": row["allergens"].split(",") if row["allergens"] else [],
+            "match_type": "db",
         }
         for row in rows
     ]
+
+    existing_dishes = {r["dish"] for r in results}
+    for cls in fuzzy_classes:
+        if cls not in existing_dishes:
+            results.append({"dish": cls, "match_type": "fuzzy_class"})
+
     return {"query": q, "results": results, "count": len(results)}
 
 
@@ -471,7 +493,144 @@ async def register(request: Request, body: dict):
     return {"username": username, "token": token}
 
 
-# @v1.get("/recipe/{dish}/random")
-# @limiter.limit("30/minute")
+@v1.get("/recipe/{dish}/random")
+@limiter.limit("30/minute")
+async def random_recipe(request: Request, dish: str):
+    conn = get_db()
+    try:
+        row = conn.execute(
+            """
+            SELECT dish, name, ingredients, instruction, servings, tags, allergens
+            FROM recipes
+            WHERE dish = ?
+            ORDER BY RANDOM()
+            LIMIT 1
+            """,
+            (dish,),
+        ).fetchone()
+    finally:
+        conn.close()
+
+    if not row:
+        raise HTTPException(status_code=404, detail=f"No recipes foud for '{dish}'")
+
+    return {
+        "dish": row["dish"],
+        "name": row["name"],
+        "ingredients": json.loads(row["ingredients"]) if row["ingredients"] else [],
+        "instructions": row["instructions"],
+        "servings": row["servings"],
+        "tags": row["tags"].split(",") if row["tags"] else [],
+        "allergens": row["allergens"].split(",") if row["allergens"] else [],
+    }
+
+
+@v1.post("/favorites/{dish}")
+@limiter.limit("30/minute")
+async def add_favorite(request: Request, dish: str, user=Depends(require_user)):
+    conn = get_db()
+    try:
+        conn.execute(
+            "INSERT OR IGNORE INTO favorites (user_id, dish) VALUES (?, ?)",
+            (user["id"], dish),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return {"dish": dish, "favorited": True}
+
+
+@v1.delete("/favorites/{dish}")
+@limiter.limit("30/minute")
+async def remove_favorite(request: Request, dish: str, user=Depends(require_user)):
+    conn = get_db()
+    try:
+        conn.execute(
+            "DELETE FROM favorites WHERE user_id = ? AND dish = ?", (user["id"], dish)
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return {"dish": dish, "favorited": False}
+
+
+@v1.get("/favorites")
+@limiter.limit("30/minute")
+async def get_favorites(request: Request, user=Depends(require_user)):
+    conn = get_db()
+    try:
+        rows = conn.execute(
+            "SELECT dish, created_at FROM favorites WHERE user_id = ? ORDER BY created_at DESC",
+        ).fetchall()
+    finally:
+        conn.close()
+    return {
+        "favorites": [{"dish": r["dish"], "saved_at": r["created_at"]} for r in rows]
+    }
+
+
+@v1.get("/dish/{dish}/fun-fact")
+@limiter.limit("30/minute")
+async def fun_fact(request: Request, dish: str):
+    facts = FUN_FACTS.get(dish.lower().replace("-", "_"))
+    if not facts:
+        return {"dish": dish, "fact": None, "message": "No fun fact yet for this dish"}
+
+    return {"dish": dish, "fact": random.choice(facts)}
+
+
+@v1.get("/metrics")
+async def metrics(request: Request, _=Depends(require_admin)):
+    conn = get_db()
+    try:
+        total = conn.execute(
+            "SELECT COUNT(*) FROM logs WHERE timestamp >= datetime('now', '-1 day'"
+        ).fetchone()[0]
+
+        avg_latency = conn.execute(
+            "SELECT AVG(duration_ms) FROM logs WHERE timestamp >= datetime('now', '-1 day'"
+        ).fetchone()[0]
+
+        by_path = conn.execute(
+            """
+            SELECT path, COUNT(*) as count, AVG(duration_ms) as avg_ms,
+                SUM(CASE WHEN status_code >= 500 THEN 1 ELSE 0 END) as errors
+            FROM logs
+            WHERE timestamp >= datetime('now', '-1 day')
+            GROUP BY path
+            ORDER BY count DESC
+            """
+        ).fetchall()
+
+        top_ips = conn.execute(
+            """
+            SELECT client_ip, COUNT(*) as count
+            FROM logs
+            WHERE timestamp >= datetime('now', '-1 day')
+            GROUP BY client_ip
+            ORDER BY count DESC
+            LIMIT 10
+            """
+        ).fetchall()
+
+    finally:
+        conn.close()
+
+    return {
+        "period": "last_24h",
+        "total_requests": total,
+        "avg_latency_ms": round(avg_latency, 2) if avg_latency else 0,
+        "by_endpoint": [
+            {
+                "path": r["path"],
+                "requests": r["count"],
+                "avg_ms": round(r["avg_ms"], 2),
+                "errors": r["errors"],
+            }
+            for r in by_path
+        ],
+        "top_ips": [{"ip": r["client_ip"], "requests": r["count"]} for r in top_ips],
+    }
+
 
 app.include_router(v1)
