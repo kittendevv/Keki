@@ -21,6 +21,7 @@ from auth import (  # type: ignore
     require_user,
     verify_password,
 )
+from pydantic import BaseModel  # type: ignore
 
 sys.path.append(str(Path(__file__).parent.parent / "model"))
 from fastapi import (  # type: ignore
@@ -52,6 +53,12 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
 )
+
+
+class AuthBody(BaseModel):
+    username: str
+    password: str
+
 
 security = HTTPBearer()
 
@@ -549,7 +556,7 @@ async def classify_mock():
 
 
 @v1.post("/auth/register")
-async def register(request: Request, body: dict):
+async def register(request: Request, body: AuthBody):
     username = (body.get("username") or "").strip()
     password = (body.get("password") or "").strip()
     if not username or not password:
@@ -574,7 +581,7 @@ async def register(request: Request, body: dict):
 
 
 @v1.post("/auth/login")
-async def login(request: Request, body: dict):
+async def login(request: Request, body: AuthBody):
     username = (body.get("username") or "").strip()
     password = (body.get("password") or "").strip()
     if not username or not password:
