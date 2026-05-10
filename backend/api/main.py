@@ -139,13 +139,48 @@ with open(
 ) as f:
     CLASSES = sorted(json.load(f).keys())
 
-transform = T.Compose(
-    [
-        T.Resize((128, 128)),
-        T.ToTensor(),
-        T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-    ]
-)
+TTA_TRANSFORMS = [
+    T.Compose(
+        [
+            T.Resize((128, 128)),
+            T.ToTensor(),
+            T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+        ]
+    ),
+    T.Compose(
+        [
+            T.Resize((128, 128)),
+            T.CenterCrop(128),
+            T.ToTensor(),
+            T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+        ]
+    ),
+    T.Compose(
+        [
+            T.Resize((144, 144)),
+            T.CenterCrop(128),
+            T.ToTensor(),
+            T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+        ]
+    ),
+    T.Compose(
+        [
+            T.Resize((144, 144)),
+            T.CenterCrop(128),
+            T.RandomHorizontalFlip(p=1.0),
+            T.ToTensor(),
+            T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+        ]
+    ),
+    T.Compose(
+        [
+            T.Resize((128, 128)),
+            T.ColorJitter(brightness=0.1, contrast=0.1),
+            T.ToTensor(),
+            T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+        ]
+    ),
+]
 
 PORTION_SIZES = {
     "pizza": 200,
@@ -175,19 +210,24 @@ DEFAULT_PORTION = 250
 async def classify(request: Request, file: UploadFile = File(...)):
     img_bytes = await file.read()
     img = Image.open(io.BytesIO(img_bytes)).convert("RGB")
-    tensor = transform(img).unsqueeze(0).numpy()  # type: ignore
 
-    outputs = session.run(None, {INPUT_NAME: tensor})[0]  # shape: (1, 101)
-    probs = softmax(outputs[0])  # type: ignore
-    top5_idx = probs.argsort()[::-1][:5]
+    all_probs = []
+    for transform in TTA_TRANSFORMS:
+        tensor = transform(img).unsqueeze(0).numpy()  # type: ignore
+        outputs = session.run(None, {INPUT_NAME: tensor})[0]
+        all_probs.append(softmax(outputs[0]))  # type: ignore
+
+    avg_probs = np.mean(all_probs, axis=0)
+    top5_idx = avg_probs.argsort()[::-1][:5]
 
     predictions = [
-        {"dish": CLASSES[i], "confidence": round(float(probs[i]), 4)} for i in top5_idx
+        {"dish": CLASSES[i], "confidence": round(float(avg_probs[i]), 4)}
+        for i in top5_idx
     ]
 
     return {
         "predictions": predictions,
-        "uncertain": predictions[0]["confidence"] < 0.4,
+        "uncertain": predictions[0]["confidence"] < 0.35,
     }
 
 
