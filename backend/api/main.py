@@ -470,5 +470,7 @@ async def register(request: Request, body: dict):
 
     return {"username": username, "token": token}
 
+@v1.get("/recipe/{dish}/random")
+@limiter.limit("30/minute")
 
 app.include_router(v1)

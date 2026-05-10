@@ -4,7 +4,7 @@ import uuid
 
 from fastapi import Header, HTTPException, status  # type: ignore
 
-DB_PATH = os.path.join(os.path.dirname(__file__), "../../db/recipes.db")
+DB_PATH = os.path.join(os.path.dirname(__file__), "../db/recipes.db")
 
 ADMIN_TOKEN = os.environ.get("ADMIN_TOKEN", "dev")
 
