@@ -11,7 +11,7 @@ from pathlib import Path
 
 import httpx  # type: ignore
 import numpy as np
-import onnxruntime as ort
+import onnxruntime as ort  # type: ignore
 import torch
 import torchvision.transforms as T
 from auth import (  # type: ignore
