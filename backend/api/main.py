@@ -10,8 +10,10 @@ from difflib import get_close_matches
 from pathlib import Path
 
 import httpx  # type: ignore
+import numpy as np
+import onnxruntime as ort
 import torch
-import torchvision.transforms as transforms
+import torchvision.transforms as T
 from auth import get_db, require_admin, require_user  # type: ignore
 
 sys.path.append(str(Path(__file__).parent.parent / "model"))
@@ -123,19 +125,25 @@ async def log_requests(request: Request, call_next):
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")  # type: ignore
 
 model = FoodCNN(num_classes=101).to(device)
-# model.load_state_dict(torch.load("foodcnn.pth", map_location=device))
-# model.eval()
+MODEL_PATH = Path(__file__).parent.parent / "model" / "onnx" / "foodcnn.onnx"
+session = ort.InferenceSession(str(MODEL_PATH))
+INPUT_NAME = session.get_inputs()[0].name
 
-classes = []
-with open("../model/trainingset/food-101/meta/train.json") as f:
-    train_data = json.load(f)
-    classes = sorted(train_data.keys())
+with open(
+    Path(__file__).parent.parent
+    / "model"
+    / "trainingset"
+    / "food-101"
+    / "meta"
+    / "train.json"
+) as f:
+    CLASSES = sorted(json.load(f).keys())
 
-transform = transforms.Compose(
+transform = T.Compose(
     [
-        transforms.Resize((224, 224)),
-        transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+        T.Resize((224, 224)),
+        T.ToTensor(),
+        T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
     ]
 )
 
@@ -165,35 +173,27 @@ DEFAULT_PORTION = 250
 @v1.post("/classify")
 @limiter.limit("10/minute")
 async def classify(request: Request, file: UploadFile = File(...)):
-    contents = await file.read()
-    image = Image.open(io.BytesIO(contents)).convert("RGB")
-    tensor = transform(image).unsqueeze(0).to(device)  # type: ignore
+    img_bytes = await file.read()
+    img = Image.open(io.BytesIO(img_bytes)).convert("RGB")
+    tensor = transform(img).unsqueeze(0).numpy()  # type: ignore
 
-    with torch.no_grad():
-        outputs = model(tensor)
+    outputs = session.run(None, {INPUT_NAME: tensor})[0]  # shape: (1, 101)
+    probs = softmax(outputs[0])  # type: ignore
+    top5_idx = probs.argsort()[::-1][:5]
 
-    probs = torch.softmax(outputs, dim=1)  # type: ignore
-    top5_confidences, top5_indices = torch.topk(probs, 5, dim=1)  # type: ignore
-
-    top1_confidence = top5_confidences[0][0].item()  # type: ignore
-
-    if top1_confidence < 0.4:
-        return {"uncertain": True, "confidence": round(top1_confidence, 4)}
-
-    top5 = [
-        {
-            "dish": classes[top5_indices[0][i].item()],  # type: ignore
-            "confidence": round(top5_confidences[0][i].item(), 4),  # type: ignore
-        }
-        for i in range(5)
+    predictions = [
+        {"dish": CLASSES[i], "confidence": round(float(probs[i]), 4)} for i in top5_idx
     ]
 
     return {
-        "uncertain": False,
-        "dish": top5[0]["dish"],
-        "confidence": top5[0]["confidence"],
-        "top5": top5,
+        "predictions": predictions,
+        "uncertain": predictions[0]["confidence"] < 0.4,
     }
+
+
+def softmax(x):
+    e_x = np.exp(x - np.max(x))
+    return e_x / e_x.sum()
 
 
 # Use /recipe/{dish}?exclude=ingredient1,ingredient2 to exclude certain ingredients from results
@@ -228,7 +228,7 @@ async def search(request: Request, q: str = Query(..., min_length=1, max_length=
     q_clean = q.strip().lower()
 
     fuzzy_classes = get_close_matches(
-        q_clean, [c.lower() for c in classes], n=5, cutoff=0.6
+        q_clean, [c.lower() for c in CLASSES], n=5, cutoff=0.6
     )
 
     term = f"%{q_clean}%"
@@ -489,7 +489,7 @@ async def health(request: Request):
 
 @v1.post("/classify_mock")
 async def classify_mock():
-    dish = random.choice(classes) if classes else "pizza"
+    dish = random.choice(CLASSES) if CLASSES else "pizza"
     confidence = round(random.uniform(0.5, 0.99), 4)
 
     return {

@@ -15,7 +15,7 @@ dummy_input = torch.randn(1, 3, 128, 128)
 torch.onnx.export(
     model,
     (dummy_input,),
-    "foodcnn.onnx",
+    "onnx/foodcnn.onnx",
     input_names=["image"],
     output_names=["logits"],
     dynamic_axes={"image": {0: "batch_size"}},
