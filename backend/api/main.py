@@ -557,8 +557,8 @@ async def classify_mock():
 
 @v1.post("/auth/register")
 async def register(request: Request, body: AuthBody):
-    username = (body.get("username") or "").strip()
-    password = (body.get("password") or "").strip()
+    username = body.username.strip()
+    password = body.password.strip()
     if not username or not password:
         raise HTTPException(status_code=400, detail="Username and password required")
 
@@ -582,8 +582,8 @@ async def register(request: Request, body: AuthBody):
 
 @v1.post("/auth/login")
 async def login(request: Request, body: AuthBody):
-    username = (body.get("username") or "").strip()
-    password = (body.get("password") or "").strip()
+    username = body.username.strip()
+    password = body.password.strip()
     if not username or not password:
         raise HTTPException(status_code=400, detail="Username and password required")
     user = None
