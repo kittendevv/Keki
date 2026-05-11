@@ -20,6 +20,8 @@ from auth import (  # type: ignore
     require_user,
     verify_password,
 )
+from celery.result import AsyncResult  # type: ignore
+from celery_app import classify_task
 from pydantic import BaseModel  # type: ignore
 
 sys.path.append(str(Path(__file__).parent.parent / "model"))
@@ -179,22 +181,37 @@ DEFAULT_PORTION = 250
 @limiter.limit("10/minute")
 async def classify(request: Request, file: UploadFile = File(...)):
     img_bytes = await file.read()
-    result = pipeline.run(img_bytes)
 
+    task = classify_task.delay(img_bytes)  # type: ignore
     return {
-        "regions": [
-            {
-                "bbox": r.bbox,
-                "dish": r.dish,
-                "confidence": r.confidence,
-                "uncertain": r.uncertain,
-                "top5": r.top5,
-            }
-            for r in result.regions
-        ],
-        "multi_food": result.multi_food,
-        "no_food_found": result.no_food_found,
+        "job_id": task.id,
+        "status": "queued",
     }
+
+
+@v1.get("/classify/status/{job_id}")
+@limiter.limit("60/minute")
+async def classify_status(request: Request, job_id: str):
+    result = AsyncResult(job_id, app=classify_task.app)  # type: ignore
+    state = result.state
+
+    if state == "PENDING":
+        return {"job_id": job_id, "status": "queued"}
+
+    if state == "STARTED":
+        return {"job_id": job_id, "status": "started"}
+
+    if state == "SUCCESS":
+        return {"job_id": job_id, "status": "done", "result": result.get()}
+
+    if state == "FAILURE":
+        return {
+            "job_id": job_id,
+            "status": "failed",
+            "error": str(result.result),
+        }
+
+    return {"job_id": job_id, "status": "unknown"}
 
 
 def softmax(x):
