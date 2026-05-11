@@ -245,6 +245,27 @@ async def mock_recipe(request: Request):
     }
 
 
+@v1.get("/search/suggest")
+@limiter.limit("60/minute")
+async def search_suggest(
+    request: Request, q: str = Query(..., min_length=1, max_length=50)
+):
+    q_clean = q.strip().lower()
+
+    prefix_matches = [c for c in CLASSES if c.lower().startswith(q_clean)]
+
+    fuzzy_matches = get_close_matches(
+        q_clean,
+        [c for c in CLASSES if not c.lower().startswith(q_clean)],
+        n=5,
+        cutoff=0.6,
+    )
+
+    suggestions = (prefix_matches + fuzzy_matches)[:5]
+
+    return {"query": q, "suggestions": suggestions}
+
+
 @v1.get("/search")
 @limiter.limit("30/minute")
 async def search(request: Request, q: str = Query(..., min_length=1, max_length=100)):
@@ -723,6 +744,12 @@ async def metrics(request: Request, _=Depends(require_admin)):
         ],
         "top_ips": [{"ip": r["client_ip"], "requests": r["count"]} for r in top_ips],
     }
+
+
+@v1.get("/classes")
+@limiter.limit("60/minute")
+async def get_classes(request: Request):
+    return {"classes": CLASSES, "count": len(CLASSES)}
 
 
 app.include_router(v1)
