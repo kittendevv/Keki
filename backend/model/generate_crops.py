@@ -170,7 +170,11 @@ def main():
                     x1, y1, x2, y2 = result
                     crop_w = x2 - x1
                     crop_h = y2 - y1
-                    if crop_w < 20 or crop_h < 20 or max(crop_w, crop_h) / min(crop_w, crop_h) > 5:
+                    if (
+                        crop_w < 20
+                        or crop_h < 20
+                        or max(crop_w, crop_h) / min(crop_w, crop_h) > 5
+                    ):
                         crop = img
                         fallback += 1
                     else:
@@ -194,5 +198,5 @@ def main():
     print(f"Output: {OUTPUT_DIR}")
 
 
-if __name__ == "__main__"
+if __name__ == "__main__":
     main()
