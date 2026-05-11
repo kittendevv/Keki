@@ -6,7 +6,7 @@ import numpy as np
 import onnxruntime as ort
 from PIL import Image
 
-IMAGES_PER_CLASS = 200
+IMAGES_PER_CLASS = 500
 
 SUBSET_CLASSES = [
     "pizza",

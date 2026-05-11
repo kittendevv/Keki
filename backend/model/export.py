@@ -7,7 +7,13 @@ from model import FoodCNN
 device = torch.device("cpu")  # type: ignore
 
 model = FoodCNN(num_classes=101).to(device)
-model.load_state_dict(torch.load("checkpoints/foodcnn_best.pth", map_location=device))
+model.load_state_dict(
+    torch.load(
+        "checkpoints/foodcnn_finetune_stage2.pth",
+        map_location=device,
+        weights_only=True,
+    )
+)
 model.eval()
 
 dummy_input = torch.randn(1, 3, 128, 128)
@@ -23,10 +29,10 @@ torch.onnx.export(
 )
 print("Exported to foodcnn.onnx")
 
-onnx_model = onnx.load("foodcnn.onnx")
+onnx_model = onnx.load("onnx/foodcnn.onnx")
 onnx.checker.check_model(onnx_model)
 print("ONNX model is valid")
 
-session = ort.InferenceSession("foodcnn.onnx")
+session = ort.InferenceSession("onnx/foodcnn.onnx")
 outputs = session.run(["logits"], {"image": dummy_input.numpy()})
 print(f"✓ Test inference passed — output shape: {outputs[0].shape}")  # type: ignore
