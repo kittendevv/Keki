@@ -1,10 +1,12 @@
 import io
 from dataclasses import dataclass
+from typing import cast
 
 import numpy as np
 import onnxruntime as ort  # type: ignore
 import torchvision.transforms as T
 from PIL import Image
+from torch.fx.experimental.sym_node import sizes_strides_methods
 
 
 @dataclass
@@ -116,7 +118,11 @@ def decode_yolo_output(
     if len(boxes_xywh) == 0:
         return []
 
-    cx, cy, w, h = boxes_xywh[:, 0], boxes_xywh[:, 1]
+    cx = boxes_xywh[:, 0]
+    cy = boxes_xywh[:, 1]
+    w = boxes_xywh[:, 2]
+    h = boxes_xywh[:, 3]
+
     x1 = (cx - w / 2) * scale_x
     y1 = (cy - h / 2) * scale_y
     x2 = (cx + w / 2) * scale_x
@@ -131,7 +137,14 @@ def decode_yolo_output(
 
     keep = nms(boxes_xyxy, confidences, NMS_IOU_THRESHOLD)
 
-    return boxes_xyxy[keep].tolist()
+    min_area = (orig_w * orig_h) * 0.01
+    boxes_xyxy = boxes_xyxy[keep]
+    areas = (boxes_xyxy[:, 2] - boxes_xyxy[:, 0]) * (
+        boxes_xyxy[:, 3] - boxes_xyxy[:, 1]
+    )
+    boxes_xyxy = boxes_xyxy[areas >= min_area]
+
+    return boxes_xyxy.tolist()
 
 
 def iou(box_a: np.ndarray, box_b: np.ndarray) -> float:
@@ -183,7 +196,7 @@ def classify_crop(
     for transform in TTA_TRANSFORMS:
         tensor = transform(crop).unsqueeze(0).numpy()  # type: ignore
         outputs = session.run(None, {input_name: tensor})[0]
-        all_probs.append(softmax(outputs[0]))
+        all_probs.append(softmax(outputs[0]))  # type: ignore
 
     avg_probs = np.mean(all_probs, axis=0)
 
@@ -202,3 +215,86 @@ def merge_duplicates(regions: list[RegionPrediction]) -> list[RegionPrediction]:
             seen[region.dish] = region
 
     return sorted(seen.values(), key=lambda r: r.confidence, reverse=True)
+
+
+class FoodPipeline:
+    def __init__(
+        self,
+        yolo_onnx_path: str,
+        foodcnn_onnx_path: str,
+        classes: list[str],
+    ):
+        self.yolo_session = ort.InferenceSession(yolo_onnx_path)
+        self.yolo_input_name = self.yolo_session.get_inputs()[0].name
+
+        self.foodcnn_session = ort.InferenceSession(foodcnn_onnx_path)
+        self.foodcnn_input_name = self.foodcnn_session.get_inputs()[0].name
+
+        self.classes = classes
+
+    def run(self, image_bytes: bytes) -> PipelineResult:
+        img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+
+        blob, scale_x, scale_y, orig_w, orig_h = preprocess_yolo(img)
+
+        yolo_output = cast(
+            np.ndarray, self.yolo_session.run(None, {self.yolo_input_name: blob})[0]
+        )
+        boxes = decode_yolo_output(yolo_output, scale_x, scale_y, orig_w, orig_h)
+        boxes = boxes[:5]
+
+        if not boxes:
+            top5 = classify_crop(
+                img, self.foodcnn_session, self.foodcnn_input_name, self.classes
+            )
+            return PipelineResult(
+                regions=[
+                    RegionPrediction(
+                        bbox=[0, 0, orig_w, orig_h],
+                        dish=top5[0]["dish"],
+                        confidence=top5[0]["confidence"],
+                        uncertain=top5[0]["confidence"] < CONFIDENCE_THRESHOLD,
+                        top5=top5,
+                    )
+                ],
+                multi_food=False,
+                no_food_found=True,
+            )
+
+        regions: list[RegionPrediction] = []
+
+        for x1, y1, x2, y2 in boxes:
+            crop_w = x2 - x1
+            crop_h = y2 - y1
+            if crop_w < 20 or crop_h < 20:
+                continue
+            if max(crop_w, crop_h) / min(crop_w, crop_h) > 5:
+                continue
+
+            PAD = 10
+            x1 = max(0, x1 - PAD)
+            y1 = max(0, y1 - PAD)
+            x2 = min(orig_w, x2 + PAD)
+            y2 = min(orig_h, y2 + PAD)
+
+            crop = img.crop((x1, y1, x2, y2))
+            top5 = classify_crop(
+                crop, self.foodcnn_session, self.foodcnn_input_name, self.classes
+            )
+
+            regions.append(
+                RegionPrediction(
+                    bbox=[round(x1), round(y1), round(x2), round(y2)],
+                    dish=top5[0]["dish"],
+                    confidence=top5[0]["confidence"],
+                    uncertain=top5[0]["confidence"] < CONFIDENCE_THRESHOLD,
+                    top5=top5,
+                )
+            )
+
+        regions = merge_duplicates(regions)
+        return PipelineResult(
+            regions=regions,
+            multi_food=len(regions) > 1,
+            no_food_found=False,
+        )

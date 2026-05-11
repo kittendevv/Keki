@@ -12,8 +12,6 @@ from pathlib import Path
 import httpx  # type: ignore
 import numpy as np
 import onnxruntime as ort  # type: ignore
-import torch
-import torchvision.transforms as T
 from auth import (  # type: ignore
     DB_PATH,
     get_db,
@@ -38,8 +36,8 @@ from fastapi import (  # type: ignore
 from fastapi.middleware.cors import CORSMiddleware  # type: ignore
 from fastapi.openapi.utils import get_openapi  # type: ignore
 from fastapi.security import HTTPBearer  # type: ignore
-from model import FoodCNN  # type: ignore
 from PIL import Image
+from pipeline import FoodPipeline  # type: ignore
 from slowapi import Limiter, _rate_limit_exceeded_handler  # type: ignore
 from slowapi.errors import RateLimitExceeded  # type: ignore
 from slowapi.util import get_remote_address  # type: ignore
@@ -136,12 +134,7 @@ async def log_requests(request: Request, call_next):
     return response
 
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")  # type: ignore
-
-model = FoodCNN(num_classes=101).to(device)
-MODEL_PATH = Path(__file__).parent.parent / "model" / "onnx" / "foodcnn.onnx"
-session = ort.InferenceSession(str(MODEL_PATH))
-INPUT_NAME = session.get_inputs()[0].name
+ONNX_DIR = Path(__file__).parent.parent / "model" / "onnx"
 
 with open(
     Path(__file__).parent.parent
@@ -153,48 +146,11 @@ with open(
 ) as f:
     CLASSES = sorted(json.load(f).keys())
 
-TTA_TRANSFORMS = [
-    T.Compose(
-        [
-            T.Resize((128, 128)),
-            T.ToTensor(),
-            T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-        ]
-    ),
-    T.Compose(
-        [
-            T.Resize((128, 128)),
-            T.CenterCrop(128),
-            T.ToTensor(),
-            T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-        ]
-    ),
-    T.Compose(
-        [
-            T.Resize((144, 144)),
-            T.CenterCrop(128),
-            T.ToTensor(),
-            T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-        ]
-    ),
-    T.Compose(
-        [
-            T.Resize((144, 144)),
-            T.CenterCrop(128),
-            T.RandomHorizontalFlip(p=1.0),
-            T.ToTensor(),
-            T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-        ]
-    ),
-    T.Compose(
-        [
-            T.Resize((128, 128)),
-            T.ColorJitter(brightness=0.1, contrast=0.1),
-            T.ToTensor(),
-            T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-        ]
-    ),
-]
+pipeline = FoodPipeline(
+    yolo_onnx_path=str(ONNX_DIR / "yolov8n.onnx"),
+    foodcnn_onnx_path=str(ONNX_DIR / "foodcnn.onnx"),
+    classes=CLASSES,
+)
 
 PORTION_SIZES = {
     "pizza": 200,
@@ -223,25 +179,21 @@ DEFAULT_PORTION = 250
 @limiter.limit("10/minute")
 async def classify(request: Request, file: UploadFile = File(...)):
     img_bytes = await file.read()
-    img = Image.open(io.BytesIO(img_bytes)).convert("RGB")
-
-    all_probs = []
-    for transform in TTA_TRANSFORMS:
-        tensor = transform(img).unsqueeze(0).numpy()  # type: ignore
-        outputs = session.run(None, {INPUT_NAME: tensor})[0]
-        all_probs.append(softmax(outputs[0]))  # type: ignore
-
-    avg_probs = np.mean(all_probs, axis=0)
-    top5_idx = avg_probs.argsort()[::-1][:5]
-
-    predictions = [
-        {"dish": CLASSES[i], "confidence": round(float(avg_probs[i]), 4)}
-        for i in top5_idx
-    ]
+    result = pipeline.run(img_bytes)
 
     return {
-        "predictions": predictions,
-        "uncertain": predictions[0]["confidence"] < 0.35,
+        "regions": [
+            {
+                "bbox": r.bbox,
+                "dish": r.dish,
+                "confidence": r.confidence,
+                "uncertain": r.uncertain,
+                "top5": r.top5,
+            }
+            for r in result.regions
+        ],
+        "multi_food": result.multi_food,
+        "no_food_found": result.no_food_found,
     }
 
 
@@ -535,7 +487,7 @@ async def health(request: Request):
 
     return {
         "status": "ok",
-        "model_loaded": model is not None,
+        "model_loaded": True,
         "db": db_status,
         "recipe_count": recipe_count,
     }
